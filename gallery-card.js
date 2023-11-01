@@ -16,8 +16,7 @@ class GalleryCard extends LitElement {
       _hass: {},
       config: {},
       resources: {},
-      currentResourceIndex: {},
-      selectedDate: {}
+      currentResourceIndex: {}
     };
   }
 
@@ -30,8 +29,6 @@ class GalleryCard extends LitElement {
           return html`<hui-warning>${error}</hui-warning>`
          })}
         <ha-card .header=${this.config.title} class="menu-${menuAlignment}">
-          ${this.currentResourceIndex == undefined || !(this.config.enable_date_search ?? false) ?
-            html`` : html`<input type="date" class="date-picker" @change="${this._handleDateChange}" value="${this._formatDateForInput(this.selectedDate)}">` }
           ${this.currentResourceIndex == undefined || !(this.config.show_reload ?? false) ?
             html`` : html`<ha-progress-button class="btn-reload" @click="${ev => this._loadResources(this._hass)}">Reload</ha-progress-button>` }
           <div class="resource-viewer" @touchstart="${ev => this._handleTouchStart(ev)}" @touchmove="${ev => this._handleTouchMove(ev)}">
@@ -45,7 +42,7 @@ class GalleryCard extends LitElement {
                   ></hui-image>` :
                 this._isImageExtension(this._currentResource().extension) ?
                 html`<img @click="${ev => this._popupImage(ev)}" src="${this._currentResource().url}"/>` :
-                html`<video controls ?loop=${this.config.video_loop} ?autoplay=${this.config.video_autoplay} src="${this._currentResource().url}#t=0.1" @loadedmetadata="${ev => this._videoMetadataLoaded(ev)}" @canplay="${ev => this._startVideo(ev)}"  preload="metadata"></video>`
+                html`<video controls ?loop=${this.config.video_loop} ?autoplay=${this.config.video_autoplay} src="${this._currentResource().url}" @loadedmetadata="${ev => this._videoMetadataLoaded(ev)}" @canplay="${ev => this._startVideo(ev)}"></video>`
               }
               <figcaption>${this._currentResource().caption} 
                 ${this._isImageExtension(this._currentResource().extension) ?
@@ -58,7 +55,7 @@ class GalleryCard extends LitElement {
           <div class="resource-menu">
             ${this.resources.map((resource, index) => {
                 return html`
-                    <figure style="margin:5px;" id="resource${index}" data-imageIndex="${index}" @click="${ev => this._selectResource(index)}" class="${(index == this.currentResourceIndex) ? 'selected' : ''}">
+                    <figure style="margin:5px;" id="resource${index}" data-imageIndex="${index}" data-index="${index}" @click="${ev => this._selectResource(index)}" class="${(index == this.currentResourceIndex) ? 'selected' : ''}">
                     ${
                       resource.isHass ?
                       html`<hui-image
@@ -69,10 +66,13 @@ class GalleryCard extends LitElement {
                       this._isImageExtension(resource.extension) ?
                       html`<img class="lzy_img" src="/local/community/gallery-card/placeholder.jpg" data-src="${resource.url}"/>` :
                         (this.config.video_preload ?? true) ?
-                        html`<video preload="none" data-src="${resource.url}#t=${(this.config.preview_video_at == null) ? 0.1 : this.config.preview_video_at }" @loadedmetadata="${ev => this._videoMetadataLoaded(ev)}" @canplay="${ev => this._downloadNextMenuVideo()}" preload="metadata"></video>` :
+                        html`<video preload="none" data-src="${resource.url}" @loadedmetadata="${ev => this._videoMetadataLoaded(ev)}" @canplay="${ev => this._downloadNextMenuVideo()}"></video>` :
                           html`<center><div class="lzy_img"><ha-icon id="play" icon="mdi:movie-play-outline"></ha-icon></div></center>`
                     }
                     <figcaption>${resource.caption} <span class="duration"></span></figcaption>
+                    
+                    ${this.currentResourceIndex == undefined || !(this.config.enable_delete ?? false) ?
+                        html`` : html`<span class="delete-icon" @click="${ev => this._deleteResource(ev,resource, index)}"> <ha-icon icon="mdi:delete"></ha-icon> </span>` }
                     </figure>
                 `;
             })}
@@ -84,7 +84,7 @@ class GalleryCard extends LitElement {
         </ha-card>
     `;
   }
- 
+
   _downloadingVideos = false;
   updated(changedProperties) {
     const arr = this.shadowRoot.querySelectorAll('img.lzy_img')
@@ -327,19 +327,12 @@ class GalleryCard extends LitElement {
       this.xDown = null;
       this.yDown = null;                                            
   };
-  
-  _handleDateChange(event) {
-    this.selectedDate = event.target.valueAsDate;
-    this._loadResources(this._hass);
-  };
 
   _loadResources(hass) {
     var commands = [];
 
     this.currentResourceIndex = undefined;
     this.resources = [];
-    if(this.selectedDate==null)
-        this.selectedDate = new Date();
 
     const maximumFilesPerEntity = this.config.maximum_files_per_entity ?? true;
     const maximumFiles = maximumFilesPerEntity ? this.config.maximum_files : undefined;
@@ -351,7 +344,6 @@ class GalleryCard extends LitElement {
     const parsedDateSort = this.config.parsed_date_sort ?? false;
     const reverseSort = this.config.reverse_sort ?? true;
     const randomSort = this.config.random_sort ?? false;
-    var filterForDate = this.config.enable_date_search ?? false;
 
     this.config.entities.forEach(entity => {
       var entityId;
@@ -380,7 +372,7 @@ class GalleryCard extends LitElement {
       }
 
       if (entityId.substring(0, 15).toLowerCase() == "media-source://") {
-        commands.push(this._loadMediaResource(hass, entityId, maximumFiles, folderFormat, fileNameFormat, fileNameDateBegins, captionFormat, recursive, reverseSort, includeVideo, includeImages, filterForDate));
+        commands.push(this._loadMediaResource(hass, entityId, maximumFiles, folderFormat, fileNameFormat, fileNameDateBegins, captionFormat, recursive, reverseSort, includeVideo, includeImages));
       }
       else {
         var entityState = hass.states[entityId];
@@ -458,7 +450,7 @@ class GalleryCard extends LitElement {
     });
   }
 
-  _loadMediaResource(hass, contentId, maximumFiles, folderFormat, fileNameFormat, fileNameDateBegins, captionFormat, recursive, reverseSort, includeVideo, includeImages, filterForDate) {
+  _loadMediaResource(hass, contentId, maximumFiles, folderFormat, fileNameFormat, fileNameDateBegins, captionFormat, recursive, reverseSort, includeVideo, includeImages) {
     return new Promise(async (resolve, reject) => {    
       var mediaPath = contentId;
       try {
@@ -475,7 +467,7 @@ class GalleryCard extends LitElement {
 
             if (folder != folderPrev) {
               try {
-                var folderValues = await this._loadMedia(this, hass, mediaPath, maximumFiles, false, reverseSort, includeVideo, includeImages, filterForDate);
+                var folderValues = await this._loadMedia(this, hass, mediaPath, maximumFiles, false, reverseSort, includeVideo, includeImages);
                 values.push(...folderValues);
               }
               catch(e) {
@@ -502,11 +494,11 @@ class GalleryCard extends LitElement {
             values.length = maximumFiles;
         }
         else 
-          values = await this._loadMedia(this, hass, mediaPath, maximumFiles, recursive, reverseSort, includeVideo, includeImages, filterForDate);        
+          values = await this._loadMedia(this, hass, mediaPath, maximumFiles, recursive, reverseSort, includeVideo, includeImages);
         
         var resources = [];
         values.forEach(mediaItem => {
-          var resource = this._createFileResource(mediaItem.authenticated_path, fileNameFormat, fileNameDateBegins, captionFormat);
+          var resource = this._createFileResource(mediaItem.authenticated_path, fileNameFormat, fileNameDateBegins, captionFormat, mediaItem.media_content_id);
 
           if (resource !== undefined) {
             resources.push(resource);
@@ -526,7 +518,7 @@ class GalleryCard extends LitElement {
     });
   }
 
-  _loadMedia(ref, hass, contentId, maximumFiles, recursive, reverseSort, includeVideo, includeImages, filterForDate) {
+  _loadMedia(ref, hass, contentId, maximumFiles, recursive, reverseSort, includeVideo, includeImages) {
     var mediaItem = {
       media_class: "directory",
       media_content_id: contentId
@@ -536,7 +528,7 @@ class GalleryCard extends LitElement {
       mediaItem.media_content_id += "/";
     }
 
-    return Promise.all(this._fetchMedia(ref, hass, mediaItem, recursive, includeVideo, includeImages, filterForDate))
+    return Promise.all(this._fetchMedia(ref, hass, mediaItem, recursive, includeVideo, includeImages))
       .then(function(values) { 
         var mediaItems = values
           .flat(Infinity)
@@ -571,7 +563,7 @@ class GalleryCard extends LitElement {
       });
   }
 
-  _fetchMedia(ref, hass, mediaItem, recursive, includeVideo, includeImages, filterForDate) {
+  _fetchMedia(ref, hass, mediaItem, recursive, includeVideo, includeImages) {
     var commands = [];
 
     if (mediaItem.media_class == "directory") {
@@ -579,17 +571,17 @@ class GalleryCard extends LitElement {
         commands.push(
           ...mediaItem.children
           .filter(mediaItem => { 
-            return ((includeVideo && mediaItem.media_class == "video") || (includeImages && mediaItem.media_class == "image") || (recursive && mediaItem.media_class == "directory" && (!filterForDate || (mediaItem.title ==  ref._folderDateFormatter((ref.config.search_date_folder_format == null)?"DD_MM_YYYY":ref.config.search_date_folder_format,ref.selectedDate) ) ))) && mediaItem.title != "@eaDir/";
+            return ((includeVideo && mediaItem.media_class == "video") || (includeImages && mediaItem.media_class == "image") || (recursive && mediaItem.media_class == "directory")) && mediaItem.title != "@eaDir/";
           })
           .map(mediaItem => {
-            return Promise.all(ref._fetchMedia(ref, hass, mediaItem, recursive, includeVideo, includeImages, filterForDate));
+            return Promise.all(ref._fetchMedia(ref, hass, mediaItem, recursive, includeVideo, includeImages));
           }));
       }
       else {
         commands.push(
           ref._fetchMediaContents(hass, mediaItem.media_content_id)
           .then(mediaItem => {
-            return Promise.all(ref._fetchMedia(ref, hass, mediaItem, recursive, includeVideo, includeImages, filterForDate));
+            return Promise.all(ref._fetchMedia(ref, hass, mediaItem, recursive, includeVideo, includeImages));
           })
         );
       }
@@ -645,11 +637,12 @@ class GalleryCard extends LitElement {
         var filePath = file;
         // /config/downloads/front_door/
         // /config/www/...
+        var originalFileUrl = fileUrl;
         var fileUrl = filePath.replace("/config/www/", "/local/");
         if (filePath.indexOf("/config/www/") < 0)
           fileUrl = "/local/" + filePath.substring(filePath.indexOf("/www/")+5);
 
-        var resource = this._createFileResource(fileUrl, fileNameFormat, fileNameDateBegins, captionFormat);
+        var resource = this._createFileResource(fileUrl, fileNameFormat, fileNameDateBegins, captionFormat, originalFileUrl);
         
         if (resource !== undefined) {
           resources.push(resource);
@@ -660,7 +653,7 @@ class GalleryCard extends LitElement {
     return Promise.resolve(resources);
   }
 
-  _createFileResource(fileRawUrl, fileNameFormat, fileNameDateBegins, captionFormat) {
+  _createFileResource(fileRawUrl, fileNameFormat, fileNameDateBegins, captionFormat, fileRef) {
     var resource;
 
     var fileUrl = fileRawUrl.split("?")[0];
@@ -701,24 +694,34 @@ class GalleryCard extends LitElement {
         extension: ext,
         caption: fileCaption,
         index: -1,
-        date: date
+        date: date, 
+        fileRef: fileRef
       };
     }
 
     return resource;
   }
   
-  _folderDateFormatter(folderFormat, date ) {
-    return dayjs(date).format(folderFormat);
+  async _deleteResource (ev, media, index){
+    ev.stopPropagation();
+    try {
+        await this._hass.callWS({
+          type: "media_source/local_source/remove",
+          media_content_id: media.fileRef
+        });
+        this.resources.splice(index, 1);
+        var elements = this.shadowRoot.querySelectorAll('[id^="resource"]');
+        if(index == this.currentResourceIndex && this.resources.length>0){
+            var idElemento = elements[0].id;
+            this.currentResourceIndex = Number(idElemento[idElemento.length - 1]);
+            this._selectResource(this.currentResourceIndex)
+        }
+      } catch (error) {
+        console.error(`Errore durante la rimozione del media:\nmedia: ${media.fileRef}\nerrore: ${error}`);
+      }
+    this.requestUpdate();
+    await this.updateComplete;
   }
-  
-  _formatDateForInput(date) {
-      const yyyy = date.getFullYear();
-      const mm = String(date.getMonth() + 1).padStart(2, '0');
-      const dd = String(date.getDate()).padStart(2, '0');
-      return `${yyyy}-${mm}-${dd}`;
-  }
- 
 
   static get styles() {
     return css`
@@ -736,11 +739,6 @@ class GalleryCard extends LitElement {
         float: right;
         margin-right: 25px;
         text-align: right;
-      }
-      .date-picker {
-        padding-left: 5px;
-        margin-left: 5px;
-        margin-top: 8px;
       }
       figcaption {
         text-align:center;
@@ -909,6 +907,11 @@ class GalleryCard extends LitElement {
         overflow-y: hidden;
         overflow-x: scroll;
         display: none;
+      }
+      .delete-icon {
+        display: block;
+        text-align: center;
+        white-space: nowrap;
       }
       /* The Modal (background) */
       .modal {
